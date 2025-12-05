@@ -13,14 +13,53 @@ export default function ActualizarPasswordPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [validSession, setValidSession] = useState<boolean | null>(null);
+  const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    const checkSession = async () => {
+    const initializeAuth = async () => {
       const supabase = createClient();
+
+      // Escuchar eventos de autenticacion
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        async (event, session) => {
+          console.log('Auth event:', event, 'Session:', !!session);
+
+          if (event === 'PASSWORD_RECOVERY') {
+            // Usuario viene del link de recuperacion
+            setValidSession(true);
+            setInitializing(false);
+          } else if (event === 'SIGNED_IN' && session) {
+            // Usuario ya tiene sesion activa (puede ser de recovery)
+            setValidSession(true);
+            setInitializing(false);
+          } else if (event === 'SIGNED_OUT') {
+            setValidSession(false);
+            setInitializing(false);
+          }
+        }
+      );
+
+      // Verificar si ya hay una sesion activa
       const { data: { session } } = await supabase.auth.getSession();
-      setValidSession(!!session);
+
+      if (session) {
+        setValidSession(true);
+      } else {
+        // Dar tiempo para que se procese el hash de la URL
+        setTimeout(() => {
+          if (validSession === null) {
+            setValidSession(false);
+          }
+          setInitializing(false);
+        }, 2000);
+      }
+
+      return () => {
+        subscription.unsubscribe();
+      };
     };
-    checkSession();
+
+    initializeAuth();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,32 +86,38 @@ export default function ActualizarPasswordPage() {
       });
 
       if (updateError) {
-        setError('Error al actualizar la contrasena. Intente nuevamente.');
+        console.error('Error updating password:', updateError);
+        setError('Error al actualizar la contrasena: ' + updateError.message);
         setLoading(false);
         return;
       }
 
       setSuccess(true);
 
+      // Cerrar sesion y redirigir al login despues de 3 segundos
       setTimeout(async () => {
         await supabase.auth.signOut();
         router.push('/');
       }, 3000);
     } catch (err) {
+      console.error('Error:', err);
       setError('Error de conexion. Intente nuevamente.');
     } finally {
       setLoading(false);
     }
   };
 
-  if (validSession === null) {
+  // Mostrar loading mientras se inicializa
+  if (initializing || validSession === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+      <div className="min-h-screen flex flex-col items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary-600 mb-4" />
+        <p className="text-gray-600">Verificando enlace de recuperacion...</p>
       </div>
     );
   }
 
+  // Sesion no valida
   if (validSession === false) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
@@ -106,6 +151,7 @@ export default function ActualizarPasswordPage() {
     );
   }
 
+  // Exito al actualizar
   if (success) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
